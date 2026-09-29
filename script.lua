@@ -1,3 +1,4 @@
+
 -- ==========================================
 -- HEHE Panel — Delta Executor
 -- Fly + Player Tracker (GitHub backend)
@@ -6,7 +7,7 @@
 -- ==== CONFIG ====
 local GITHUB_USER = "shexerking99"
 local GITHUB_REPO = "deltatracker"
-local GITHUB_TOKEN = "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"
+local GITHUB_TOKEN = ""
 local BRANCH = "main"
 local FILE_PATH = "data.json"
 
