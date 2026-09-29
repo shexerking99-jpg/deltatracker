@@ -1,201 +1,17 @@
-
 -- ==========================================
--- HEHE Panel — Delta Executor
--- Fly + Player Tracker (GitHub backend)
+-- HEHE Panel — Delta (Public version)
+-- Fly + Present Players (local only)
 -- ==========================================
-
--- ==== CONFIG ====
-local GITHUB_USER = "shexerking99"
-local GITHUB_REPO = "deltatracker"
-local GITHUB_TOKEN = ""
-local BRANCH = "main"
-local FILE_PATH = "data.json"
 
 local PASSWORD = "25+25=50"
-local REFRESH_INTERVAL = 60
+local REFRESH_INTERVAL = 5
 
-local API = "https://api.github.com/repos/" .. GITHUB_USER .. "/" .. GITHUB_REPO .. "/contents/" .. FILE_PATH
-
--- ==== SERVICES ====
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local LocalizationService = game:GetService("LocalizationService")
-local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
 
 local LP = Players.LocalPlayer
-
--- ==== BASE64 ====
-local function b64encode(str)
-    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    return ((str:gsub('.', function(x)
-        local r, b2 = '', x:byte()
-        for i = 8, 1, -1 do r = r .. (b2 % 2^i - b2 % 2^(i-1) > 0 and '1' or '0') end
-        return r
-    end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-        if #x < 6 then return '' end
-        local c = 0
-        for i = 1, 6 do c = c + (x:sub(i,i) == '1' and 2^(6-i) or 0) end
-        return b:sub(c+1, c+1)
-    end) .. ({'', '==', '='})[#str % 3 + 1])
-end
-
-local function b64decode(data)
-    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    data = data:gsub('[^'..b..'=]', '')
-    return (data:gsub('.', function(x)
-        if x == '=' then return '' end
-        local r, f = '', (b:find(x) - 1)
-        for i = 6, 1, -1 do r = r .. (f % 2^i - f % 2^(i-1) > 0 and '1' or '0') end
-        return r
-    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
-        if #x ~= 8 then return '' end
-        local c = 0
-        for i = 1, 8 do c = c + (x:sub(i,i) == '1' and 2^(8-i) or 0) end
-        return string.char(c)
-    end))
-end
-
--- ==== HELPERS ====
-local function safe(fn, ...)
-    local ok, res = pcall(fn, ...)
-    return ok and res or nil
-end
-
-local function http(method, url, body, headers)
-    headers = headers or {}
-    local ok, res = pcall(function()
-        return request({
-            Url = url,
-            Method = method,
-            Headers = headers,
-            Body = body,
-        })
-    end)
-    if not ok then return nil, tostring(res) end
-    return res
-end
-
--- ==== COLLECT ====
-local function getPlatform()
-    if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-        return "Mobile"
-    elseif UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
-        return "Console"
-    end
-    return "Desktop"
-end
-
-local function collectInfo()
-    local executor, ver = safe(identifyexecutor)
-    local hwid = safe(function()
-        if gethwid then return gethwid() end
-        return nil
-    end)
-
-    local key = tostring(LP.UserId) .. "_" .. tostring(game.PlaceId)
-
-    return key, {
-        UserId = LP.UserId,
-        Username = LP.Name,
-        DisplayName = LP.DisplayName,
-        AccountAge = LP.AccountAge,
-        Membership = tostring(LP.MembershipType),
-        Platform = getPlatform(),
-        Executor = executor or "unknown",
-        ExecutorVer = ver or "?",
-        HWID = hwid or "unavailable",
-        Locale = safe(function() return LocalizationService.RobloxLocaleId end) or "?",
-        PlaceId = tostring(game.PlaceId),
-        GameName = safe(function()
-            local ok, info = pcall(function()
-                return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
-            end)
-            return ok and info or "?"
-        end) or "?",
-        LastSeen = os.date("%Y-%m-%d %H:%M:%S"),
-        Timestamp = os.time(),
-    }
-end
-
--- ==== FETCH ====
-local function fetchData()
-    local res = http("GET", API .. "?ref=" .. BRANCH, nil, {
-        ["Authorization"] = "token " .. GITHUB_TOKEN,
-        ["User-Agent"] = "DeltaTracker",
-        ["Accept"] = "application/vnd.github.v3+json",
-    })
-    if not res or not res.Body then return nil, "no response" end
-
-    local decoded
-    local ok = pcall(function()
-        decoded = HttpService:JSONDecode(res.Body)
-    end)
-    if not ok then return nil, "bad json" end
-
-    if not decoded.content then return nil, "no content" end
-    if not decoded.sha then return nil, "no sha" end
-
-    local content = b64decode(decoded.content:gsub("%s", ""))
-    local parsed
-    local ok2 = pcall(function()
-        parsed = HttpService:JSONDecode(content)
-    end)
-    if not ok2 or type(parsed) ~= "table" then
-        parsed = { users = {} }
-    end
-
-    if not parsed.users then parsed.users = {} end
-    return parsed, decoded.sha
-end
-
--- ==== PUSH ====
-local function pushInfo()
-    local key, info = collectInfo()
-
-    local data, sha = fetchData()
-    if not data then return false, "fetch failed" end
-
-    local existing = data.users[key]
-    if existing then
-        info.FirstSeen = existing.FirstSeen or info.LastSeen
-        info.Visits = (existing.Visits or 0) + 1
-    else
-        info.FirstSeen = info.LastSeen
-        info.Visits = 1
-    end
-    data.users[key] = info
-
-    local json = HttpService:JSONEncode(data)
-    local escaped = json:gsub("[^\0-\127]", function(c)
-        return string.format("\\u%04x", string.byte(c))
-    end)
-    local encoded = b64encode(escaped)
-
-    local body = HttpService:JSONEncode({
-        message = "update " .. os.date("%Y-%m-%d %H:%M:%S"),
-        content = encoded,
-        sha = sha,
-        branch = BRANCH,
-    })
-
-    local res = http("PUT", API, body, {
-        ["Authorization"] = "token " .. GITHUB_TOKEN,
-        ["User-Agent"] = "DeltaTracker",
-        ["Accept"] = "application/vnd.github.v3+json",
-        ["Content-Type"] = "application/json",
-    })
-
-    if res and res.Status and res.Status >= 200 and res.Status < 300 then
-        return true
-    end
-    return false, "push failed: " .. tostring(res and res.Status)
-end
-
-task.spawn(function()
-    local ok, err = pushInfo()
-    print("[HEHE] push: " .. tostring(ok) .. " " .. tostring(err or ""))
-end)
 
 -- ==== UI ====
 local ScreenGui = Instance.new("ScreenGui")
@@ -424,7 +240,7 @@ LP.CharacterAdded:Connect(function()
     end
 end)
 
--- ==== PLAYERS ====
+-- ==== PLAYERS (present only) ====
 local PlayersFrame = Instance.new("ScrollingFrame")
 PlayersFrame.Size = UDim2.new(1, 0, 1, 0)
 PlayersFrame.BackgroundTransparency = 1
@@ -463,41 +279,38 @@ local function logLine(parent, text, color)
     l.Parent = parent
 end
 
-local function renderPlayers(users)
+local function renderPlayers()
     for _, c in ipairs(PlayersFrame:GetChildren()) do
         if c:IsA("TextLabel") then c:Destroy() end
     end
 
-    if not users then
-        logLine(PlayersFrame, "[-] Failed to fetch.", Color3.fromRGB(255, 80, 80))
-        return
-    end
-
     local count = 0
-    local now = os.time()
-    local recent = 0
-
-    for _, rec in pairs(users) do
+    for _, p in ipairs(Players:GetPlayers()) do
         count = count + 1
-        local isRecent = (now - (rec.Timestamp or 0)) < 300
-        if isRecent then recent = recent + 1 end
+        local isSelf = (p == LP)
+        local color = isSelf and Color3.fromRGB(0, 255, 136) or Color3.fromRGB(200, 200, 220)
 
-        local dot = isRecent and "●" or "○"
-        local dotCol = isRecent and Color3.fromRGB(0, 255, 136) or Color3.fromRGB(120, 120, 120)
+        local char = p.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-        logLine(PlayersFrame, dot .. " " .. (rec.Username or "?") .. "  (" .. tostring(rec.UserId) .. ")", dotCol)
-        logLine(PlayersFrame, "   Display: " .. tostring(rec.DisplayName) .. "  |  " .. tostring(rec.Membership))
-        logLine(PlayersFrame, "   Age: " .. tostring(rec.AccountAge) .. "d  |  Platform: " .. tostring(rec.Platform))
-        logLine(PlayersFrame, "   Executor: " .. tostring(rec.Executor) .. " " .. tostring(rec.ExecutorVer), Color3.fromRGB(255, 200, 0))
-        logLine(PlayersFrame, "   HWID: " .. tostring(rec.HWID), Color3.fromRGB(255, 100, 200))
-        logLine(PlayersFrame, "   Locale: " .. tostring(rec.Locale))
-        logLine(PlayersFrame, "   Place: " .. tostring(rec.PlaceId) .. "  |  " .. tostring(rec.GameName))
-        logLine(PlayersFrame, "   First: " .. tostring(rec.FirstSeen) .. "  |  Visits: " .. tostring(rec.Visits))
-        logLine(PlayersFrame, "   Last: " .. tostring(rec.LastSeen))
+        logLine(PlayersFrame, (isSelf and "★ " or "● ") .. p.Name .. "  (" .. tostring(p.UserId) .. ")", color)
+        logLine(PlayersFrame, "   Display: " .. p.DisplayName .. "  |  " .. tostring(p.MembershipType))
+        logLine(PlayersFrame, "   Age: " .. tostring(p.AccountAge) .. "d")
+        if hum then
+            logLine(PlayersFrame, "   Health: " .. math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth) .. "  |  Speed: " .. tostring(hum.WalkSpeed))
+        end
+        if hrp then
+            local pos = hrp.Position
+            logLine(PlayersFrame, "   Pos: " .. math.floor(pos.X) .. ", " .. math.floor(pos.Y) .. ", " .. math.floor(pos.Z))
+        end
+        if p.Team then
+            logLine(PlayersFrame, "   Team: " .. p.Team.Name)
+        end
         logLine(PlayersFrame, "")
     end
 
-    logLine(PlayersFrame, "── TOTAL: " .. count .. "  |  RECENT: " .. recent .. "  |  " .. os.date("%H:%M:%S"), Color3.fromRGB(200, 100, 255))
+    logLine(PlayersFrame, "── PRESENT: " .. count .. "  |  " .. os.date("%H:%M:%S"), Color3.fromRGB(200, 100, 255))
 end
 
 -- ==== AUTH ====
@@ -506,10 +319,7 @@ local refreshToken = 0
 
 local function doRefresh()
     if not authed then return end
-    task.spawn(function()
-        local data = fetchData()
-        renderPlayers(data and data.users or nil)
-    end)
+    renderPlayers()
 end
 
 HeheBtn.MouseButton1Click:Connect(function()
